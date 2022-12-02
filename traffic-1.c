@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <assert.h>
-
+#include <stdbool.h>
 /* Constants for simulation */
 
 #define ALLOWED_CARS 3          	/* Number of cars allowed on street at a time */
@@ -21,12 +21,25 @@
 
 /* Add your synchronization variables here */
 
+// pthread_mutex_t mutexIncoming;
+// pthread_cond_t condIncoming;
+// pthread_mutex_t mutexOutgoing;
+// pthread_cond_t condOutgoing;
+// pthread_mutex_t mutexStreet;
+// pthread_cond_t condStreet;
+
+pthread_mutex_t mutexPassing;
+pthread_cond_t condPassing;
+pthread_mutex_t mutexStreet;
+pthread_cond_t condStreet;
+pthread_mutex_t mutex_add;
+
 /* These obvious variables are at your disposal. Feel free to remove them if you want */
 static int cars_on_street;   		/* Total numbers of cars currently on the street */
 static int incoming_onstreet;      	/* Total numbers of cars incoming on the street */
 static int outgoing_onstreet;      	/* Total numbers of cars outgoing on the street */
 static int cars_since_repair;		/* Total numbers of cars entered since the last repair */
-
+bool direction;
 
 typedef struct {
           int arrival_time;  	// time between the arrival of this car and the previous car
@@ -45,10 +58,24 @@ initialize(car *arr, char *filename) {
 	incoming_onstreet = 0;
 	outgoing_onstreet = 0;
 	cars_since_repair = 0;
+	direction=true;
 
 	/* Initialize your synchronization variables (and 
          * other variables you might use) here
 	 */
+
+	// pthread_mutex_init(&mutexIncoming, NULL);
+	// pthread_cond_init(&condIncoming, NULL);
+	// pthread_mutex_init(&mutexOutgoing, NULL);
+	// pthread_cond_init(&condOutgoing, NULL);
+	// pthread_mutex_init(&mutexStreet, NULL);
+	// pthread_cond_init(&condStreet, NULL);
+
+	pthread_mutex_init(&mutexPassing, NULL);
+	pthread_cond_init(&condPassing, NULL);
+	pthread_mutex_init(&mutexStreet, NULL);
+	pthread_cond_init(&condPassing, NULL);
+	pthread_mutex_init(&mutex_add,NULL);
 
         /* Read in the data file and initialize the car array */
         FILE *fp;
@@ -91,10 +118,57 @@ void *street_thread(void *junk) {
                 /* cars are admitted without regard of the allowed		*/ 
                 /* limit, which direction a car is going, and whether	*/
                 /* the street needs to be repaired          			*/
+		if (cars_since_repair <= 6){
 
-		repair_street();
+			pthread_mutex_lock(&mutexPassing);
 
-	}
+			if (cars_on_street < 3 && incoming_onstreet>0 ){
+				if (direction==true){
+				incoming_onstreet--;
+				cars_on_street++;
+				cars_since_repair++;
+				pthread_cond_signal(&condPassing);
+				
+				}
+				else if (cars_on_street==0)
+
+					{	direction=true;
+						cars_on_street++;
+						cars_since_repair++;
+						incoming_onstreet--;
+						pthread_cond_signal(&condPassing);
+					}
+
+			}
+			else if (cars_on_street<3 && outgoing_onstreet>0){
+				if (direction==false){
+				outgoing_onstreet--;
+				cars_on_street++;
+				cars_since_repair++;
+				pthread_cond_signal(&condStreet);
+				}
+				else if (cars_on_street==0)
+					{	direction=false;
+						cars_on_street++;
+						cars_since_repair++;
+						outgoing_onstreet--;
+						pthread_cond_signal(&condStreet);
+					}
+			
+			}
+			pthread_mutex_unlock(&mutexPassing);
+		}
+		else{
+			if (cars_on_street == 0){
+				repair_street();
+			    cars_since_repair=0;
+			}
+		}
+		sleep(1);
+		}
+
+		// repair_street();
+	
 
 	pthread_exit(NULL);
 }
@@ -109,6 +183,13 @@ incoming_enter() {
 	/* 
 	 *  YOUR CODE HERE. 
 	 */
+	
+	pthread_mutex_lock(&mutex_add);
+	pthread_cond_wait(&condPassing, &mutex_add);
+	pthread_mutex_unlock(&mutex_add);
+	
+	// cars_since_repair++;
+
 }
 
 /* Code executed by an outgoing car to enter the street.
@@ -120,6 +201,10 @@ outgoing_enter() {
 	/* 
 	 *  YOUR CODE HERE. 
 	 */
+
+	pthread_mutex_lock(&mutexStreet);
+	pthread_cond_wait(&condStreet, &mutexStreet);
+	pthread_mutex_unlock(&mutexStreet);
 }
 
 /* Code executed by a car to simulate the duration for travel
@@ -139,6 +224,11 @@ incoming_leave() {
 	/* 
 	 *  YOUR CODE HERE. 
 	 */
+
+	pthread_mutex_lock(&mutexPassing);
+	cars_on_street--;
+	pthread_mutex_unlock(&mutexPassing);
+
 }
 
 
@@ -150,6 +240,10 @@ outgoing_leave() {
 	/* 
 	 *  YOUR CODE HERE. 
 	 */
+
+	pthread_mutex_lock(&mutexPassing);
+	cars_on_street--;
+	pthread_mutex_unlock(&mutexPassing);
 }
 
 /* Main code for incoming car threads.  
@@ -159,8 +253,14 @@ outgoing_leave() {
 void*
 incoming_thread(void *arg) {
 	car *car_info = (car*)arg;
-
+	
 	/* enter street */
+    
+    pthread_mutex_lock(&mutexPassing);
+	incoming_onstreet=incoming_onstreet+1;
+	
+	pthread_mutex_unlock(&mutexPassing);
+
 	incoming_enter();
 	
         /* Car travel --- do not make changes to the 3 lines below*/
@@ -183,6 +283,12 @@ outgoing_thread(void *arg) {
 	car *car_info = (car*)arg;
 
 	/* enter street */
+
+	pthread_mutex_lock(&mutexPassing);
+	outgoing_onstreet=outgoing_onstreet+1;
+	
+	pthread_mutex_unlock(&mutexPassing);
+	
 	outgoing_enter();
 	
         /* Car travel --- do not make changes to the 3 lines below*/
@@ -249,6 +355,11 @@ int main(int nargs, char **args) {
 	/* wait for all car threads to finish */
 	for (i = 0; i < num_cars; i++) 
 		pthread_join(car_tid[i], &status);
+
+	// pthread_mutex_destroy(&mutexIncoming);
+	// pthread_cond_destroy(&condIncoming);
+	// pthread_mutex_destroy(&mutexOutgoing);
+	// pthread_cond_destroy(&condOutgoing);
 
 	/* terminate the street thread. */
 	pthread_cancel(street_tid);
